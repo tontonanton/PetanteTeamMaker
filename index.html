@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Générateur d'équipes de Pétanque</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; padding: 20px; background-color: #f0f2f5; color: #1c1e21;
+            display: flex; justify-content: center; align-items: center; min-height: 100vh;
+        }
+        .container {
+            max-width: 500px; width: 100%; margin: auto; background: white;
+            padding: 25px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .screen { display: none; }
+        .screen.active { display: block; }
+        h1, h2, h3 { text-align: center; color: #0056b3; }
+        .form-group, .mode-selection { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; }
+        input[type="text"], select {
+            width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px;
+            box-sizing: border-box; font-size: 1rem; margin-bottom: 10px;
+        }
+        .player-role-group { display: flex; gap: 10px; align-items: center; }
+        .player-role-group input { flex-grow: 1; }
+        button {
+            background-color: #007bff; color: white; padding: 12px 20px; border: none;
+            border-radius: 6px; cursor: pointer; width: 100%; font-size: 1.1rem;
+            font-weight: 600; transition: background-color 0.2s; margin-top: 10px;
+        }
+        button:hover { background-color: #0056b3; }
+        button.secondary { background-color: #6c757d; }
+        button.secondary:hover { background-color: #5a6268; }
+        .results-box {
+            margin-top: 20px; padding: 20px; background-color: #e9f5ff;
+            border-left: 5px solid #007bff; border-radius: 5px;
+        }
+        .team { font-size: 1.2rem; font-weight: bold; margin-bottom: 10px; }
+        .turn-message {
+            padding: 20px; text-align: center; background-color: #f8f9fa;
+            border: 1px dashed #ccc; border-radius: 6px;
+        }
+        .vote-choice-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px; margin-top: 15px;
+        }
+        button.vote-choice {
+            background-color: #f8f9fa; color: #333; border: 1px solid #ccc; font-weight: normal;
+        }
+        button.vote-choice.selected {
+            background-color: #28a745; color: white; border-color: #218838; font-weight: bold;
+        }
+        .mode-selection label { display: inline; margin-right: 15px; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+
+        <!-- ===== SCREEN 1: SETUP ===== -->
+        <div id="setupScreen" class="screen active">
+            <h1>Configuration de la Partie</h1>
+            
+            <div class="form-group mode-selection">
+                <label>Mode de formation :</label>
+                <input type="radio" id="modeVote" name="mode" value="vote" checked onchange="toggleMode()">
+                <label for="modeVote">Vote Démocratique</label>
+                <input type="radio" id="modeRoles" name="mode" value="roles" onchange="toggleMode()">
+                <label for="modeRoles">Par Rôles</label>
+            </div>
+
+            <!-- Settings for VOTE mode -->
+            <div id="voteSetup">
+                <div class="form-group">
+                    <label for="playerCount">Nombre de joueurs :</label>
+                    <select id="playerCount" onchange="createPlayerInputs()">
+                        <option value="4">4 joueurs</option>
+                        <option value="6" selected>6 joueurs</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Player Inputs Area (dynamic) -->
+            <div id="playerInputs"></div>
+
+            <div class="form-group">
+                <h3>Exclure une paire de joueurs (optionnel)</h3>
+                <div style="display: flex; gap: 10px;">
+                    <select id="excludePlayer1"></select>
+                    <select id="excludePlayer2"></select>
+                </div>
+            </div>
+            <button onclick="startParty()">Commencer</button>
+        </div>
+
+        <!-- ===== SCREEN 2: VOTING (Only for vote mode) ===== -->
+        <div id="votingScreen" class="screen">
+            <h2 id="votingPlayerTitle"></h2>
+            <div id="votingForm"></div>
+            <div id="votingMessage" class="turn-message" style="display: none;"></div>
+        </div>
+
+        <!-- ===== SCREEN 3: RESULTS ===== -->
+        <div id="resultsScreen" class="screen">
+            <h2 id="resultsTitle"></h2>
+            <div class="results-box">
+                <div id="team1" class="team"></div>
+                <div id="team2" class="team"></div>
+            </div>
+            <br>
+            <button onclick="restartApp()" class="secondary">Recommencer une partie</button>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let appState = { players: [], votes: {}, excludedPair: [], currentPlayerIndex: 0 };
+        const ROLES = ["Pointeur", "Milieu", "Tireur"];
+
+        // ===== NAVIGATION AND SETUP =====
+
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
+        }
+
+        function toggleMode() {
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            document.getElementById('voteSetup').style.display = (mode === 'vote') ? 'block' : 'none';
+            if (mode === 'roles') {
+                document.getElementById('playerCount').value = '6';
+            }
+            createPlayerInputs();
+        }
+
+        function createPlayerInputs() {
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            const count = parseInt(document.getElementById('playerCount').value);
+            const inputsDiv = document.getElementById('playerInputs');
+            inputsDiv.innerHTML = '';
+
+            for (let i = 1; i <= count; i++) {
+                let playerHtml = `
+                    <div class="form-group">
+                        <div class="player-role-group">
+                            <input type="text" id="player${i}" value="Joueur ${i}" onkeyup="updateExclusionDropdowns()" placeholder="Nom du Joueur ${i}">`;
+
+                if (mode === 'roles') {
+                    playerHtml += `<select id="role${i}">${ROLES.map(r => `<option value="${r}">${r}</option>`).join('')}</select>`;
+                }
+                
+                playerHtml += `</div></div>`;
+                inputsDiv.innerHTML += playerHtml;
+            }
+            updateExclusionDropdowns();
+        }
+
+        function updateExclusionDropdowns() {
+            const count = parseInt(document.getElementById('playerCount').value);
+            const ex1 = document.getElementById('excludePlayer1');
+            const ex2 = document.getElementById('excludePlayer2');
+            const names = [];
+            for (let i = 1; i <= count; i++) {
+                names.push(document.getElementById(`player${i}`).value || `Joueur ${i}`);
+            }
+            ex1.innerHTML = '<option value="">Personne</option>';
+            ex2.innerHTML = '<option value="">Personne</option>';
+            names.forEach((name, index) => {
+                ex1.innerHTML += `<option value="${name}">${name}</option>`;
+                ex2.innerHTML += `<option value="${name}">${name}</option>`;
+            });
+        }
+
+        function startParty() {
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            const count = parseInt(document.getElementById('playerCount').value);
+            
+            // --- Common setup for both modes ---
+            appState.players = [];
+            const playerNames = new Set();
+            for (let i = 1; i <= count; i++) {
+                const name = document.getElementById(`player${i}`).value.trim();
+                if (!name) { alert(`Veuillez donner un nom au Joueur ${i}.`); return; }
+                if (playerNames.has(name)) { alert(`Le nom "${name}" est utilisé plusieurs fois. Veuillez utiliser des noms uniques.`); return; }
+                playerNames.add(name);
+
+                const player = { id: i, name: name };
+                if (mode === 'roles') {
+                    player.role = document.getElementById(`role${i}`).value;
+                }
+                appState.players.push(player);
+            }
+
+            const ex1 = document.getElementById('excludePlayer1').value;
+            const ex2 = document.getElementById('excludePlayer2').value;
+            if (ex1 && ex2 && ex1 === ex2) {
+                alert('Veuillez sélectionner deux joueurs différents pour l\'exclusion.'); return;
+            }
+            appState.excludedPair = (ex1 && ex2) ? [ex1, ex2] : [];
+
+            // --- Branch to the correct logic ---
+            if (mode === 'vote') {
+                startVotingProcess();
+            } else {
+                generateTeamsByRole();
+            }
+        }
+        
+        // ===== MODE 1: DEMOCRATIC VOTE =====
+
+        function startVotingProcess() {
+            appState.currentPlayerIndex = 0;
+            showScreen('votingScreen');
+            setupVoteForCurrentPlayer();
+        }
+
+        function setupVoteForCurrentPlayer() { /* ... unchanged ... */ }
+        function toggleVoteChoice(buttonElement) { /* ... unchanged ... */ }
+        function confirmVote() { /* ... unchanged, calls generateTeamsByVote() at the end ... */ }
+        function generateTeamsByVote() { /* ... this is the old generateTeams() ... */ }
+
+        // ===== MODE 2: ROLE-BASED RANDOM DRAW =====
+        
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+
+        function generateTeamsByRole() {
+            // 1. Validate role counts
+            const roleCounts = { Pointeur: 0, Milieu: 0, Tireur: 0 };
+            appState.players.forEach(p => roleCounts[p.role]++);
+            for (const role of ROLES) {
+                if (roleCounts[role] !== 2) {
+                    alert(`Erreur : Il doit y avoir exactement 2 joueurs avec le rôle "${role}".`);
+                    return;
+                }
+            }
+
+            // 2. Segregate and shuffle
+            const pointers = appState.players.filter(p => p.role === 'Pointeur');
+            const milieux = appState.players.filter(p => p.role === 'Milieu');
+            const tireurs = appState.players.filter(p => p.role === 'Tireur');
+
+            shuffleArray(pointers);
+            shuffleArray(milieux);
+            shuffleArray(tireurs);
+
+            // 3. Assemble initial teams
+            let team1 = [pointers[0], milieux[0], tireurs[0]];
+            let team2 = [pointers[1], milieux[1], tireurs[1]];
+
+            // 4. Check for exclusion violation
+            if (appState.excludedPair.length === 2) {
+                const [ex1_name, ex2_name] = appState.excludedPair;
+                const team1Names = team1.map(p => p.name);
+                
+                if (team1Names.includes(ex1_name) && team1Names.includes(ex2_name)) {
+                    // Violation found in team1, we need to swap.
+                    const ex1 = team1.find(p => p.name === ex1_name);
+                    const ex2 = team1.find(p => p.name === ex2_name);
+
+                    // Find players in team2 with the same roles to swap
+                    const p1_team2 = team2.find(p => p.role === ex1.role);
+                    const p2_team2 = team2.find(p => p.role === ex2.role);
+                    
+                    // Swap ex2 with its counterpart in team2
+                    team1 = team1.filter(p => p.name !== ex2.name).concat(p2_team2);
+                    team2 = team2.filter(p => p.name !== p2_team2.name).concat(ex2);
+                }
+            }
+            
+            const finalTeam1 = team1.map(p => p.name);
+            const finalTeam2 = team2.map(p => p.name);
+
+            showResults([finalTeam1, finalTeam2], "Équipes (par Rôles)");
+        }
+        
+        // ===== RESULTS AND RESTART =====
+
+        function showResults(bestCombination, title) {
+            showScreen('resultsScreen');
+            document.getElementById('resultsTitle').textContent = title;
+            const team1Div = document.getElementById('team1');
+            const team2Div = document.getElementById('team2');
+            if (bestCombination && bestCombination.length > 0) {
+                team1Div.innerHTML = `<strong>Équipe 1 :</strong> ${bestCombination[0].join(', ')}`;
+                team2Div.innerHTML = `<strong>Équipe 2 :</strong> ${bestCombination[1].join(', ')}`;
+            } else {
+                team1Div.innerHTML = 'Aucune composition d\'équipe valide n\'a pu être formée avec les contraintes.';
+                team2Div.innerHTML = '';
+            }
+        }
+        
+        function restartApp() {
+            appState = { players: [], votes: {}, excludedPair: [], currentPlayerIndex: 0 };
+            document.getElementById('modeVote').checked = true;
+            toggleMode();
+            showScreen('setupScreen');
+        }
+
+        // Helper for getting combinations (used only for vote mode)
+        function getCombinations(array, size) { /* ... unchanged ... */ }
+        
+        // On load, initialize the view
+        window.onload = createPlayerInputs;
+
+        // --- We need to copy the unchanged functions for vote mode here ---
+        function setupVoteForCurrentPlayer() {
+            const player = appState.players[appState.currentPlayerIndex];
+            document.getElementById('votingPlayerTitle').innerText = `C'est au tour de ${player.name} de voter`;
+            
+            const votingForm = document.getElementById('votingForm');
+            votingForm.innerHTML = ''; 
+
+            const choicesPerPlayer = appState.players.length === 4 ? 1 : 2;
+            
+            const instruction = document.createElement('p');
+            instruction.textContent = `Choisissez ${choicesPerPlayer === 1 ? 'le joueur' : 'les deux joueurs'} avec qui vous voulez jouer :`;
+            votingForm.appendChild(instruction);
+
+            const buttonGrid = document.createElement('div');
+            buttonGrid.className = 'vote-choice-grid';
+            appState.players.forEach(p => {
+                if (p.id !== player.id) {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'vote-choice';
+                    button.textContent = p.name;
+                    button.dataset.playerName = p.name;
+                    button.onclick = () => toggleVoteChoice(button);
+                    buttonGrid.appendChild(button);
+                }
+            });
+            votingForm.appendChild(buttonGrid);
+
+            const confirmButton = document.createElement('button');
+            confirmButton.textContent = 'Valider et cacher mon vote';
+            confirmButton.onclick = confirmVote;
+            votingForm.appendChild(confirmButton);
+            
+            document.getElementById('votingMessage').style.display = 'none';
+            votingForm.style.display = 'block';
+        }
+
+        function toggleVoteChoice(buttonElement) {
+            const choicesPerPlayer = appState.players.length === 4 ? 1 : 2;
+            const selectedCount = document.querySelectorAll('.vote-choice.selected').length;
+
+            if (buttonElement.classList.contains('selected')) {
+                buttonElement.classList.remove('selected');
+            } else {
+                if (selectedCount < choicesPerPlayer) {
+                    buttonElement.classList.add('selected');
+                } else {
+                    alert(`Vous ne pouvez choisir que ${choicesPerPlayer} coéquipier(s).`);
+                }
+            }
+        }
+        
+        function confirmVote() {
+            const player = appState.players[appState.currentPlayerIndex];
+            const choicesPerPlayer = appState.players.length === 4 ? 1 : 2;
+            const selectedButtons = document.querySelectorAll('.vote-choice.selected');
+            
+            if (selectedButtons.length < choicesPerPlayer) {
+                alert(`Veuillez obligatoirement choisir ${choicesPerPlayer} coéquipier(s).`); return;
+            }
+
+            const playerVotes = [];
+            selectedButtons.forEach(button => playerVotes.push(button.dataset.playerName));
+            appState.votes[player.name] = playerVotes;
+
+            document.getElementById('votingForm').style.display = 'none';
+            const votingMessage = document.getElementById('votingMessage');
+            appState.currentPlayerIndex++;
+
+            if (appState.currentPlayerIndex < appState.players.length) {
+                const nextPlayer = appState.players[appState.currentPlayerIndex];
+                votingMessage.innerHTML = `<h3>Vote enregistré !</h3><p>Veuillez passer l'appareil à <strong>${nextPlayer.name}</strong>.</p><button onclick="setupVoteForCurrentPlayer()">Afficher mon écran de vote</button>`;
+            } else {
+                votingMessage.innerHTML = `<h3>Tous les votes sont terminés !</h3><button onclick="generateTeamsByVote()">Calculer les équipes</button>`;
+            }
+            votingMessage.style.display = 'block';
+        }
+        
+        function generateTeamsByVote() {
+            const playerNames = appState.players.map(p => p.name);
+            const affinityScores = {};
+            playerNames.forEach(p1 => {
+                playerNames.forEach(p2 => {
+                    if (p1 < p2) affinityScores[[p1, p2].sort().join('-')] = 0;
+                });
+            });
+            for(const voter in appState.votes) {
+                appState.votes[voter].forEach(votedFor => {
+                    const key = [voter, votedFor].sort().join('-');
+                    if (affinityScores.hasOwnProperty(key)) affinityScores[key]++;
+                });
+            }
+            const teamSize = playerNames.length / 2;
+            const combinations = getCombinations(playerNames, teamSize);
+            const validCombinations = combinations.slice(0, combinations.length / 2);
+            let bestCombination = [];
+            let maxScore = -1;
+            validCombinations.forEach(team1 => {
+                const team2 = playerNames.filter(p => !team1.includes(p));
+                if (appState.excludedPair.length === 2) {
+                    const [ex1, ex2] = appState.excludedPair;
+                    if ((team1.includes(ex1) && team1.includes(ex2)) || (team2.includes(ex1) && team2.includes(ex2))) {
+                        return;
+                    }
+                }
+                let currentScore = 0;
+                getCombinations(team1, 2).forEach(pair => currentScore += affinityScores[pair.sort().join('-')] || 0);
+                getCombinations(team2, 2).forEach(pair => currentScore += affinityScores[pair.sort().join('-')] || 0);
+                if (currentScore > maxScore) {
+                    maxScore = currentScore;
+                    bestCombination = [team1, team2];
+                }
+            });
+            showResults(bestCombination, "Équipes (Vote Démocratique)");
+        }
+
+        function getCombinations(array, size) {
+            const result = [];
+            function p(t, i) {
+                if (t.length === size) { result.push(t); return; }
+                if (i + 1 > array.length) return;
+                p(t.concat(array[i]), i + 1);
+                p(t, i + 1);
+            }
+            p([], 0);
+            return result;
+        }
+
+    </script>
+</body>
+</html>
